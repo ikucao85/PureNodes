@@ -23,7 +23,6 @@ jobs:
           curl -L --connect-timeout 15 --max-time 60 "$SUBS" -o raw.txt -s -S
           [ ! -s raw.txt ] && echo "❌ 订阅内容为空" && exit 1
 
-          # 自动 Base64 解码
           if base64 -d raw.txt > decoded.txt 2>/dev/null && [ -s decoded.txt ]; then
             mv decoded.txt content.txt
             echo "✅ 已自动解码 Base64"
@@ -32,17 +31,16 @@ jobs:
             echo "ℹ️ 非 Base64，直接使用"
           fi
 
-      - name: 提取节点 → 去特殊字符 → 按地区排序
+      - name: 提取节点 → 清理 → 排序
         run: |
-          # 提取所有协议节点
           grep -E '^(ss|ssr|vmess|trojan|anytls|socks5|http)://' content.txt > raw_nodes.txt || true
           echo "✅ 提取到 $(wc -l < raw_nodes.txt) 个节点"
           [ ! -s raw_nodes.txt ] && echo "❌ 未识别到任何节点" && exit 1
 
-          # 去 emoji + 特殊控制字符 + 多余空格
-          sed -i 's/[\x{1F000}-\x{1F9FF}]//g; s/[^\x00-\x7F]//g; s/[[:cntrl:]]//g; s/  */ /g; s/^ *//; s/ *$//' raw_nodes.txt
+          # 👇 修复：改用兼容写法，去掉 emoji/特殊字符/多余空格
+          sed -i 's/[[:nonascii:][:cntrl:]]//g; s/[[:space:]]\{1,\}/ /g; s/^ *//; s/ *$//' raw_nodes.txt
 
-          # 按地区优先级排序：港 → 台 → 日 → 新 → 韩 → 美 → 其他
+          # 按地区排序（逻辑不变）
           awk '
           BEGIN{
             order["HK"]=1; order["港"]=1; order["Hong"]=1; order["TW"]=2; order["台"]=2; order["JP"]=3; order["日"]=3;
@@ -55,29 +53,21 @@ jobs:
           }
           ' raw_nodes.txt | sort -t'|' -k1,1n -k2,2 | cut -d'|' -f2 > sorted_nodes.txt
 
-          echo "✅ 已去特殊字符并按地区排序完成"
+          echo "✅ 清理+排序完成"
 
       - name: 生成三种格式
         run: |
-          # 通用纯链接
           cp sorted_nodes.txt nodes.txt
-
-          # Clash 格式
           echo "proxies:" > nodes_clash.yaml
           while IFS= read -r line; do
             [ -z "$line" ] && continue
             echo "  - $line" >> nodes_clash.yaml
           done < sorted_nodes.txt
-
-          # Surfboard 格式
           echo "[Proxy]" > nodes_surfboard.conf
           cat sorted_nodes.txt >> nodes_surfboard.conf
-
-          # 输出目录
           mkdir -p ./output
           mv nodes.txt nodes_clash.yaml nodes_surfboard.conf ./output/
-          echo "✅ 全部完成，文件列表："
-          ls -lh ./output/
+          echo "✅ 全部完成"
 
       - name: 提交推送
         run: |
