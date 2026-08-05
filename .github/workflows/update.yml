@@ -1,5 +1,5 @@
 name: PureNodes 自动更新
-run-name: 正在刷新节点 ✨
+run-name: 正在刷新节点
 
 on:
   schedule:
@@ -22,17 +22,7 @@ jobs:
           chmod +x subconverter/subconverter
 
       - name: 生成仅节点配置
-        run: |
-          cat > pure.ini << 'EOF'
-[common]
-enable_udp = true
-add_rule = false
-add_group = false
-add_proxy_group = false
-dns = ""
-ipv6 = false
-sort = false
-EOF
+        run: echo -e '[common]\nenable_udp = true\nadd_rule = false\nadd_group = false\nadd_proxy_group = false\ndns = ""\nipv6 = false\nsort = false' > pure.ini
 
       - name: 执行转换
         run: |
@@ -47,5 +37,5 @@ EOF
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add ./output/
-          git commit -m "🤖 更新节点 $(date +'%Y-%m-%d %H:%M')" --allow-empty
+          git commit -m "更新节点 $(date +'%Y-%m-%d %H:%M')" --allow-empty
           git push
