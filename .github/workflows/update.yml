@@ -12,69 +12,57 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: 拉取仓库代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 安装 subconverter
+      - name: 安装依赖
         run: |
-          wget -q --timeout=30 https://github.com/tindy2013/subconverter/releases/latest/download/subconverter_linux64.tar.gz
-          tar xf subconverter_linux64.tar.gz
-          chmod +x subconverter/subconverter
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y jq
 
-      - name: 生成极简配置
-        run: |
-          echo '[common]' > pure.ini
-          echo 'enable_udp = true' >> pure.ini
-          echo 'add_rule = false' >> pure.ini
-          echo 'add_group = false' >> pure.ini
-          echo 'add_proxy_group = false' >> pure.ini
-          echo 'dns = ""' >> pure.ini
-          echo 'ipv6 = false' >> pure.ini
-          echo 'sort = false' >> pure.ini
-          echo 'enable_rule_generator = false' >> pure.ini
-          echo 'prepend_rule = false' >> pure.ini
-          echo 'append_rule = false' >> pure.ini
-          echo 'retain_original_proxy = true' >> pure.ini
-          echo 'disable_external_snippets = true' >> pure.ini
-          echo 'skip_certificate_verify = true' >> pure.ini
-
-      - name: 读取订阅并自动处理 Base64
+      - name: 拉取并解析订阅
         run: |
           SUBS=$(grep -v '^#' source.txt | grep -v '^$')
-          echo "✅ 原始订阅：$SUBS"
+          [ -z "$SUBS" ] && echo "❌ source.txt 无链接" && exit 1
+          echo "✅ 订阅链接：$SUBS"
 
-          # 先下载内容
-          curl -L --connect-timeout 15 --max-time 60 "$SUBS" -o raw_sub.txt
+          # 下载内容，超时控制
+          curl -L --connect-timeout 15 --max-time 60 "$SUBS" -o raw.txt -s -S
+          [ ! -s raw.txt ] && echo "❌ 订阅内容为空" && exit 1
 
-          # 检测是否是 Base64，是就解码
-          if base64 -d raw_sub.txt > decoded_sub.txt 2>/dev/null && [ -s decoded_sub.txt ]; then
-            echo "✅ 检测到 Base64，已自动解码"
-            FINAL_SUB="./decoded_sub.txt"
+          # 自动 Base64 解码
+          if base64 -d raw.txt > decoded.txt 2>/dev/null && [ -s decoded.txt ]; then
+            mv decoded.txt content.txt
+            echo "✅ 已自动解码 Base64"
           else
-            echo "ℹ️ 非 Base64，直接使用原始内容"
-            FINAL_SUB="./raw_sub.txt"
+            mv raw.txt content.txt
+            echo "ℹ️ 非 Base64，直接使用"
           fi
 
-          echo "FINAL_SUB=$FINAL_SUB" >> $GITHUB_ENV
+          # 提取所有节点链接（ss/ssr/vmess/trojan/anytls/socks5/http）
+          grep -E '^(ss|ssr|vmess|trojan|anytls|socks5|http)://' content.txt > nodes.txt || true
+          echo "✅ 提取到 $(wc -l < nodes.txt) 个节点"
+          [ ! -s nodes.txt ] && echo "❌ 未识别到任何节点" && exit 1
 
-      - name: 执行转换（使用解码后内容）
-        run: |
+          # 生成 Clash 纯节点格式
+          echo "proxies:" > nodes_clash.yaml
+          while IFS= read -r line; do
+            echo "$line" | sed 's/^/  - /' >> nodes_clash.yaml
+          done < nodes.txt
+
+          # 生成 Surfboard 纯节点格式
+          echo "[Proxy]" > nodes_surfboard.conf
+          cat nodes.txt >> nodes_surfboard.conf
+
+          # 移到输出目录
           mkdir -p ./output
-          rm -f ./output/*
-          SUB_FILE="${{ env.FINAL_SUB }}"
-
-          timeout 90 ./subconverter/subconverter --generate --config pure.ini --path ./output/ --output nodes.txt --exclude-rules --exclude-groups --retry 2 --timeout 15 "$SUB_FILE"
-          timeout 90 ./subconverter/subconverter --generate --type clash --config pure.ini --path ./output/ --output nodes_clash.yaml --exclude-rules --exclude-groups --retry 2 --timeout 15 "$SUB_FILE"
-          timeout 90 ./subconverter/subconverter --generate --type surfboard --config pure.ini --path ./output/ --output nodes_surfboard.conf --exclude-rules --exclude-groups --retry 2 --timeout 15 "$SUB_FILE"
-
-          echo "✅ 完成，文件与行数："
+          mv nodes.txt nodes_clash.yaml nodes_surfboard.conf ./output/
+          echo "✅ 完成，文件列表："
           ls -lh ./output/
-          wc -l ./output/*
 
       - name: 提交推送
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ./output/
           git commit -m "更新节点 $(date +'%Y-%m-%d %H:%M')" --allow-empty
           git push
