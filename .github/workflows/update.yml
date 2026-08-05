@@ -1,0 +1,58 @@
+name: PureNodes 自动更新
+run-name: 正在刷新节点 ✨
+
+on:
+  schedule:
+    - cron: '0 */3 * * *'   # 每3小时自动更新，可改为 0 */6 * * * 每6小时
+  workflow_dispatch:        # 支持手动点按钮立即运行
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # 必须开启，否则无法提交代码
+    steps:
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
+
+      - name: 安装 subconverter
+        run: |
+          wget -q https://github.com/tindy2013/subconverter/releases/latest/download/subconverter_linux64.tar.gz
+          tar xf subconverter_linux64.tar.gz
+          chmod +x subconverter/subconverter
+
+      - name: 生成「仅输出节点」配置
+        run: |
+          cat > pure.ini << 'EOF'
+[common]
+enable_udp = true
+add_rule = false
+add_group = false
+add_proxy_group = false
+dns = ""
+ipv6 = false
+sort = false
+EOF
+
+      - name: 执行转换
+        run: |
+          SUBS=$(grep -v '^#' source.txt | grep -v '^$')
+          mkdir -p ./output
+          ./subconverter/subconverter --generate \
+            --config pure.ini \
+            --path ./output/ \
+            --output nodes.txt $SUBS
+          ./subconverter/subconverter --generate \
+            --type clash --config pure.ini \
+            --path ./output/ --output nodes_clash.yaml $SUBS
+          ./subconverter/subconverter --generate \
+            --type surfboard --config pure.ini \
+            --path ./output/ --output nodes_surfboard.conf $SUBS
+
+      - name: 提交并推送最新节点
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add ./output/
+          git commit -m "🤖 更新节点 $(date +'%Y-%m-%d %H:%M')" || echo "无变更，跳过提交"
+          git push
