@@ -24,9 +24,17 @@ jobs:
       - name: 生成仅节点配置
         run: echo -e '[common]\nenable_udp = true\nadd_rule = false\nadd_group = false\nadd_proxy_group = false\ndns = ""\nipv6 = false\nsort = false' > pure.ini
 
-      - name: 执行转换
+      - name: 读取并验证订阅链接
         run: |
           SUBS=$(grep -v '^#' source.txt | grep -v '^$')
+          echo "读取到的订阅：$SUBS"
+          if [ -z "$SUBS" ]; then
+            echo "❌ 错误：source.txt 未找到有效订阅链接！"
+            exit 1
+          fi
+
+      - name: 执行转换
+        run: |
           mkdir -p ./output
           ./subconverter/subconverter --generate --config pure.ini --path ./output/ --output nodes.txt $SUBS
           ./subconverter/subconverter --generate --type clash --config pure.ini --path ./output/ --output nodes_clash.yaml $SUBS
