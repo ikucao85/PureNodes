@@ -31,23 +31,14 @@ jobs:
             echo "ℹ️ 非 Base64，直接使用"
           fi
 
-      - name: 提取 → 通用清洗 → 排序
+      - name: 提取 → 过滤 Trojan → 仅排序
         run: |
-          grep -E '^(ss|ssr|vmess|trojan|anytls|socks5|http)://' content.txt > raw_nodes.txt || true
-          echo "✅ 提取到 $(wc -l < raw_nodes.txt) 个节点"
-          [ ! -s raw_nodes.txt ] && echo "❌ 未识别到任何节点" && exit 1
+          # 提取所有协议节点，排除 trojan://
+          grep -E '^(ss|ssr|vmess|anytls|socks5|http)://' content.txt > raw_nodes.txt || true
+          echo "✅ 提取到 $(wc -l < raw_nodes.txt) 个节点（已排除 Trojan）"
+          [ ! -s raw_nodes.txt ] && echo "❌ 未识别到任何有效节点" && exit 1
 
-          # 👇 通用清洗：清除所有逗号+空格乱码 + 大小写修正 + 多余项
-          sed -i '
-            s/\?security[^&]*//g
-            s/, proxy type [^&]*//g
-            s/allowinsecure=/allowInsecure=/g
-            s/&insecure=[01]//g
-            s/#.*$//g
-            s/[[:space:]]//g
-          ' raw_nodes.txt
-
-          # 仅排序
+          # 仅按地区排序，不修改任何内容
           awk '
           BEGIN{
             order["HK"]=1; order["港"]=1; order["Hong"]=1
@@ -65,7 +56,7 @@ jobs:
           }
           ' raw_nodes.txt | sort -t'|' -k1,1n -k2,2 | cut -d'|' -f2 > sorted_nodes.txt
 
-          echo "✅ 清洗+排序完成，共 $(wc -l < sorted_nodes.txt) 条有效节点"
+          echo "✅ 排序完成，共 $(wc -l < sorted_nodes.txt) 条节点"
 
       - name: 生成三种格式
         run: |
