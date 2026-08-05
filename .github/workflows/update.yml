@@ -14,68 +14,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 拉取订阅并预处理
+      - name: 拉取订阅（伪装UA+抗超时）
         run: |
           SUBS=$(grep -v '^#' source.txt | grep -v '^$')
-          [ -z "$SUBS" ] && echo "❌ source.txt 无链接" && exit 1
-          echo "✅ 订阅链接：$SUBS"
+          [ -z "$SUBS" ] && exit 1
+          curl -L \
+            --connect-timeout 30 \
+            --max-time 120 \
+            --retry 5 \
+            --retry-delay 5 \
+            -A "ClashforWindows/0.20.39" \
+            --insecure \
+            "$SUBS" -o raw.txt -s -S
+          [ ! -s raw.txt ] && exit 1
 
-          curl -L --connect-timeout 15 --max-time 60 "$SUBS" -o raw.txt -s -S
-          [ ! -s raw.txt ] && echo "❌ 订阅内容为空" && exit 1
+          # ===== 解码控制区 =====
+          # 若确认永远明文，把下面两行替换为：mv raw.txt content.txt
+          base64 -d raw.txt > decoded.txt 2>/dev/null && mv decoded.txt content.txt || mv raw.txt content.txt
+          echo "✅ 内容处理完成"
 
-          if base64 -d raw.txt > decoded.txt 2>/dev/null && [ -s decoded.txt ]; then
-            mv decoded.txt content.txt
-            echo "✅ 已自动解码 Base64"
-          else
-            mv raw.txt content.txt
-            echo "ℹ️ 非 Base64，直接使用"
-          fi
-
-      - name: 提取 → 过滤 Trojan → 仅排序
+      - name: 提取+过滤+排序
         run: |
-          # 提取所有协议节点，排除 trojan://
           grep -E '^(ss|ssr|vmess|anytls|socks5|http)://' content.txt > raw_nodes.txt || true
-          echo "✅ 提取到 $(wc -l < raw_nodes.txt) 个节点（已排除 Trojan）"
-          [ ! -s raw_nodes.txt ] && echo "❌ 未识别到任何有效节点" && exit 1
+          [ ! -s raw_nodes.txt ] && exit 1
+          awk 'BEGIN{h["HK"]=1;h["港"]=1;h["TW"]=2;h["台"]=2;h["JP"]=3;h["日"]=3;h["SG"]=4;h["新"]=4;h["US"]=5;h["美"]=5} {l=$0;r=99;for(k in h)if(index(l,k)){r=h[k];break} print r"|"l}' raw_nodes.txt | sort -t'|' -k1,1n -k2 | cut -d'|' -f2 > sorted.txt
 
-          # 仅按地区排序，不修改任何内容
-          awk '
-          BEGIN{
-            order["HK"]=1; order["港"]=1; order["Hong"]=1
-            order["TW"]=2; order["台"]=2
-            order["JP"]=3; order["日"]=3
-            order["SG"]=4; order["新"]=4
-            order["KR"]=5; order["韩"]=5
-            order["US"]=6; order["美"]=6
-            order["CN"]=7; order["中"]=7
-          }
-          {
-            line=$0; rank=99
-            for(k in order) if(index(line,k)) { rank=order[k]; break }
-            print rank "|" line
-          }
-          ' raw_nodes.txt | sort -t'|' -k1,1n -k2,2 | cut -d'|' -f2 > sorted_nodes.txt
-
-          echo "✅ 排序完成，共 $(wc -l < sorted_nodes.txt) 条节点"
-
-      - name: 生成三种格式
+      - name: 生成格式
         run: |
-          cp sorted_nodes.txt nodes.txt
-          echo "proxies:" > nodes_clash.yaml
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            echo "  - $line" >> nodes_clash.yaml
-          done < sorted_nodes.txt
-          echo "[Proxy]" > nodes_surfboard.conf
-          cat sorted_nodes.txt >> nodes_surfboard.conf
-          mkdir -p ./output
-          mv nodes.txt nodes_clash.yaml nodes_surfboard.conf ./output/
-          echo "✅ 全部完成"
+          mkdir -p output
+          cp sorted.txt output/nodes.txt
+          awk '{print "  - "$0}' sorted.txt > output/nodes_clash.yaml
+          echo "[Proxy]" > output/nodes_surfboard.conf
+          cat sorted.txt >> output/nodes_surfboard.conf
 
-      - name: 提交推送
+      - name: 提交
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ./output/
-          git commit -m "更新节点 $(date +'%Y-%m-%d %H:%M')" --allow-empty
+          git add output/
+          git commit -m "更新 $(date +'%Y%m%d %H:%M')" --allow-empty
           git push
