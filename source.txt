@@ -1,1 +1,2 @@
 https://app.sublink.works/x/yldfhll
+https://212.47.238.39/api/v1/client/subscribe?token=73fef174bcddb30d5ec96ec8c8476b8c
