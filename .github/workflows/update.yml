@@ -14,18 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装依赖
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -qq -y jq
-
-      - name: 拉取并解析订阅
+      - name: 拉取订阅并预处理
         run: |
           SUBS=$(grep -v '^#' source.txt | grep -v '^$')
           [ -z "$SUBS" ] && echo "❌ source.txt 无链接" && exit 1
           echo "✅ 订阅链接：$SUBS"
 
-          # 下载内容，超时控制
           curl -L --connect-timeout 15 --max-time 60 "$SUBS" -o raw.txt -s -S
           [ ! -s raw.txt ] && echo "❌ 订阅内容为空" && exit 1
 
@@ -38,25 +32,51 @@ jobs:
             echo "ℹ️ 非 Base64，直接使用"
           fi
 
-          # 提取所有节点链接（ss/ssr/vmess/trojan/anytls/socks5/http）
-          grep -E '^(ss|ssr|vmess|trojan|anytls|socks5|http)://' content.txt > nodes.txt || true
-          echo "✅ 提取到 $(wc -l < nodes.txt) 个节点"
-          [ ! -s nodes.txt ] && echo "❌ 未识别到任何节点" && exit 1
+      - name: 提取节点 → 去特殊字符 → 按地区排序
+        run: |
+          # 提取所有协议节点
+          grep -E '^(ss|ssr|vmess|trojan|anytls|socks5|http)://' content.txt > raw_nodes.txt || true
+          echo "✅ 提取到 $(wc -l < raw_nodes.txt) 个节点"
+          [ ! -s raw_nodes.txt ] && echo "❌ 未识别到任何节点" && exit 1
 
-          # 生成 Clash 纯节点格式
+          # 去 emoji + 特殊控制字符 + 多余空格
+          sed -i 's/[\x{1F000}-\x{1F9FF}]//g; s/[^\x00-\x7F]//g; s/[[:cntrl:]]//g; s/  */ /g; s/^ *//; s/ *$//' raw_nodes.txt
+
+          # 按地区优先级排序：港 → 台 → 日 → 新 → 韩 → 美 → 其他
+          awk '
+          BEGIN{
+            order["HK"]=1; order["港"]=1; order["Hong"]=1; order["TW"]=2; order["台"]=2; order["JP"]=3; order["日"]=3;
+            order["SG"]=4; order["新"]=4; order["KR"]=5; order["韩"]=5; order["US"]=6; order["美"]=6; order["CN"]=7; order["中"]=7;
+          }
+          {
+            line=$0; rank=99;
+            for(k in order) if(index(line,k)) { rank=order[k]; break; }
+            print rank "|" line
+          }
+          ' raw_nodes.txt | sort -t'|' -k1,1n -k2,2 | cut -d'|' -f2 > sorted_nodes.txt
+
+          echo "✅ 已去特殊字符并按地区排序完成"
+
+      - name: 生成三种格式
+        run: |
+          # 通用纯链接
+          cp sorted_nodes.txt nodes.txt
+
+          # Clash 格式
           echo "proxies:" > nodes_clash.yaml
           while IFS= read -r line; do
-            echo "$line" | sed 's/^/  - /' >> nodes_clash.yaml
-          done < nodes.txt
+            [ -z "$line" ] && continue
+            echo "  - $line" >> nodes_clash.yaml
+          done < sorted_nodes.txt
 
-          # 生成 Surfboard 纯节点格式
+          # Surfboard 格式
           echo "[Proxy]" > nodes_surfboard.conf
-          cat nodes.txt >> nodes_surfboard.conf
+          cat sorted_nodes.txt >> nodes_surfboard.conf
 
-          # 移到输出目录
+          # 输出目录
           mkdir -p ./output
           mv nodes.txt nodes_clash.yaml nodes_surfboard.conf ./output/
-          echo "✅ 完成，文件列表："
+          echo "✅ 全部完成，文件列表："
           ls -lh ./output/
 
       - name: 提交推送
