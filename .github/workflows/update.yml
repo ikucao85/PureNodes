@@ -21,59 +21,22 @@ jobs:
           tar xf subconverter_linux64.tar.gz
           chmod +x subconverter/subconverter
 
-      - name: 生成极简配置（只节点，不拉任何远程）
-        run: |
-          cat > pure.ini << 'EOF'
-[common]
-enable_udp = true
-add_rule = false
-add_group = false
-add_proxy_group = false
-dns = ""
-ipv6 = false
-sort = false
-# 👇 关键：关闭所有额外拉取
-prepend_rule = false
-append_rule = false
-retain_original_proxy = true
-enable_rule_generator = false
-remove_special_characters = false
-EOF
+      - name: 生成极简配置
+        run: echo '[common]' > pure.ini && echo 'enable_udp = true' >> pure.ini && echo 'add_rule = false' >> pure.ini && echo 'add_group = false' >> pure.ini && echo 'add_proxy_group = false' >> pure.ini && echo 'dns = ""' >> pure.ini && echo 'ipv6 = false' >> pure.ini && echo 'sort = false' >> pure.ini && echo 'enable_rule_generator = false' >> pure.ini
 
-      - name: 读取订阅并校验
+      - name: 读取并校验订阅
         run: |
           SUBS=$(grep -v '^#' source.txt | grep -v '^$')
-          echo "✅ 有效订阅：$SUBS"
-          [ -z "$SUBS" ] && echo "❌ source.txt 无链接" && exit 1
+          echo "有效订阅：$SUBS"
+          if [ -z "$SUBS" ]; then exit 1; fi
 
-      - name: 执行转换（加超时+禁止远程规则）
+      - name: 执行转换
         run: |
           mkdir -p ./output
           rm -f ./output/*
-
-          timeout 120 ./subconverter/subconverter \
-            --generate \
-            --config pure.ini \
-            --path ./output/ \
-            --output nodes.txt \
-            --exclude-rules \
-            --exclude-groups \
-            --prefer-ip \
-            $SUBS
-
-          timeout 120 ./subconverter/subconverter \
-            --generate --type clash \
-            --config pure.ini \
-            --path ./output/ --output nodes_clash.yaml \
-            --exclude-rules --exclude-groups $SUBS
-
-          timeout 120 ./subconverter/subconverter \
-            --generate --type surfboard \
-            --config pure.ini \
-            --path ./output/ --output nodes_surfboard.conf \
-            --exclude-rules --exclude-groups $SUBS
-
-          echo "✅ 转换完成，文件列表："
+          timeout 120 ./subconverter/subconverter --generate --config pure.ini --path ./output/ --output nodes.txt --exclude-rules --exclude-groups $SUBS
+          timeout 120 ./subconverter/subconverter --generate --type clash --config pure.ini --path ./output/ --output nodes_clash.yaml --exclude-rules --exclude-groups $SUBS
+          timeout 120 ./subconverter/subconverter --generate --type surfboard --config pure.ini --path ./output/ --output nodes_surfboard.conf --exclude-rules --exclude-groups $SUBS
           ls -lh ./output/
 
       - name: 提交推送
