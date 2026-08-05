@@ -31,14 +31,20 @@ jobs:
             echo "ℹ️ 非 Base64，直接使用"
           fi
 
-      - name: 提取 → 修复格式 → 排序
+      - name: 提取 → 强制清洗 → 排序
         run: |
           grep -E '^(ss|ssr|vmess|trojan|anytls|socks5|http)://' content.txt > raw_nodes.txt || true
           echo "✅ 提取到 $(wc -l < raw_nodes.txt) 个节点"
           [ ! -s raw_nodes.txt ] && echo "❌ 未识别到任何节点" && exit 1
 
-          # 👇 修复：清理乱码参数 + 去掉特殊锚点 + 修正大小写
-          sed -i 's/\?security, proxy type tls/&/g; s/allowinsecure=/allowInsecure=/g; s/#.*$//g' raw_nodes.txt
+          # 👇 强制清洗：专门修复 Surfboard 不兼容项
+          sed -i '
+            s/\?security, proxy type tls//g
+            s/allowinsecure=/allowInsecure=/g
+            s/&insecure=[01]//g
+            s/#.*$//g
+            s/[[:space:]]//g
+          ' raw_nodes.txt
 
           # 仅排序：保留原始内容，不去任何字符
           awk '
@@ -58,7 +64,7 @@ jobs:
           }
           ' raw_nodes.txt | sort -t'|' -k1,1n -k2,2 | cut -d'|' -f2 > sorted_nodes.txt
 
-          echo "✅ 格式修复+排序完成"
+          echo "✅ 清洗+排序完成，共 $(wc -l < sorted_nodes.txt) 条有效节点"
 
       - name: 生成三种格式
         run: |
