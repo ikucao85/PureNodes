@@ -31,22 +31,23 @@ jobs:
             echo "ℹ️ 非 Base64，直接使用"
           fi
 
-      - name: 提取 → 强制清洗 → 排序
+      - name: 提取 → 通用清洗 → 排序
         run: |
           grep -E '^(ss|ssr|vmess|trojan|anytls|socks5|http)://' content.txt > raw_nodes.txt || true
           echo "✅ 提取到 $(wc -l < raw_nodes.txt) 个节点"
           [ ! -s raw_nodes.txt ] && echo "❌ 未识别到任何节点" && exit 1
 
-          # 👇 强制清洗：专门修复 Surfboard 不兼容项
+          # 👇 通用清洗：清除所有逗号+空格乱码 + 大小写修正 + 多余项
           sed -i '
-            s/\?security, proxy type tls//g
+            s/\?security[^&]*//g
+            s/, proxy type [^&]*//g
             s/allowinsecure=/allowInsecure=/g
             s/&insecure=[01]//g
             s/#.*$//g
             s/[[:space:]]//g
           ' raw_nodes.txt
 
-          # 仅排序：保留原始内容，不去任何字符
+          # 仅排序
           awk '
           BEGIN{
             order["HK"]=1; order["港"]=1; order["Hong"]=1
