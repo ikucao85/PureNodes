@@ -9,7 +9,6 @@ on:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    # 👇 修复：permissions 必须与 runs-on 同级，缩进严格为2空格
     permissions:
       contents: write
     steps:
@@ -39,16 +38,9 @@ EOF
         run: |
           SUBS=$(grep -v '^#' source.txt | grep -v '^$')
           mkdir -p ./output
-          ./subconverter/subconverter --generate \
-            --config pure.ini \
-            --path ./output/ \
-            --output nodes.txt "$SUBS"
-          ./subconverter/subconverter --generate \
-            --type clash --config pure.ini \
-            --path ./output/ --output nodes_clash.yaml "$SUBS"
-          ./subconverter/subconverter --generate \
-            --type surfboard --config pure.ini \
-            --path ./output/ --output nodes_surfboard.conf "$SUBS"
+          ./subconverter/subconverter --generate --config pure.ini --path ./output/ --output nodes.txt $SUBS
+          ./subconverter/subconverter --generate --type clash --config pure.ini --path ./output/ --output nodes_clash.yaml $SUBS
+          ./subconverter/subconverter --generate --type surfboard --config pure.ini --path ./output/ --output nodes_surfboard.conf $SUBS
 
       - name: 提交推送
         run: |
