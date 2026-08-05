@@ -16,12 +16,9 @@ jobs:
 
       - name: 拉取订阅（修复URL格式+伪装UA）
         run: |
-          # 读取并清理链接（去首尾空格/换行/注释）
           SUBS=$(grep -v '^#' source.txt | grep -v '^$' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
           [ -z "$SUBS" ] && echo "❌ source.txt 无有效链接" && exit 1
           echo "✅ 拉取地址：$SUBS"
-
-          # 核心：-- 保护URL，避免特殊字符被解析
           curl -L \
             --connect-timeout 30 \
             --max-time 120 \
@@ -31,9 +28,20 @@ jobs:
             --insecure \
             -o raw.txt -s -S \
             -- "$SUBS"
-
           [ ! -s raw.txt ] && echo "❌ 拉取失败" && exit 1
-          # 按需处理解码（确认明文就保留第二行）
+
+      - name: 预览内容（判断是否解码）
+        run: |
+          echo "===== 【原始内容】前300字符 ====="
+          head -c 300 raw.txt
+          echo -e "\n\n===== 【尝试解码】前300字符 ====="
+          base64 -d raw.txt 2>/dev/null | head -c 300 || echo "❌ 解码失败 → 内容是明文，无需解码"
+
+      - name: 内容处理（按需启用解码）
+        run: |
+          # 等你看完预览后再决定：
+          # 明文 → 直接 mv raw.txt content.txt
+          # Base64 → 保留下面这行
           base64 -d raw.txt > decoded.txt 2>/dev/null && mv decoded.txt content.txt || mv raw.txt content.txt
           echo "✅ 内容处理完成"
 
