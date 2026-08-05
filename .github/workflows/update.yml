@@ -3,7 +3,7 @@ run-name: 正在刷新节点
 
 on:
   schedule:
-    - cron: '0 */3 * * *'
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 jobs:
@@ -17,26 +17,67 @@ jobs:
 
       - name: 安装 subconverter
         run: |
-          wget -q https://github.com/tindy2013/subconverter/releases/latest/download/subconverter_linux64.tar.gz
+          wget -q --timeout=30 https://github.com/tindy2013/subconverter/releases/latest/download/subconverter_linux64.tar.gz
           tar xf subconverter_linux64.tar.gz
           chmod +x subconverter/subconverter
 
-      - name: 生成极简配置
-        run: echo '[common]' > pure.ini && echo 'enable_udp = true' >> pure.ini && echo 'add_rule = false' >> pure.ini && echo 'add_group = false' >> pure.ini && echo 'add_proxy_group = false' >> pure.ini && echo 'dns = ""' >> pure.ini && echo 'ipv6 = false' >> pure.ini && echo 'sort = false' >> pure.ini && echo 'enable_rule_generator = false' >> pure.ini
+      - name: 生成极简配置（彻底关闭所有远程拉取）
+        run: |
+          echo '[common]' > pure.ini
+          echo 'enable_udp = true' >> pure.ini
+          echo 'add_rule = false' >> pure.ini
+          echo 'add_group = false' >> pure.ini
+          echo 'add_proxy_group = false' >> pure.ini
+          echo 'dns = ""' >> pure.ini
+          echo 'ipv6 = false' >> pure.ini
+          echo 'sort = false' >> pure.ini
+          echo 'enable_rule_generator = false' >> pure.ini
+          echo 'prepend_rule = false' >> pure.ini
+          echo 'append_rule = false' >> pure.ini
+          echo 'retain_original_proxy = true' >> pure.ini
+          echo 'remove_special_characters = false' >> pure.ini
+          echo 'skip_certificate_verify = true' >> pure.ini
+          echo 'disable_external_snippets = true' >> pure.ini
 
       - name: 读取并校验订阅
         run: |
           SUBS=$(grep -v '^#' source.txt | grep -v '^$')
-          echo "有效订阅：$SUBS"
-          if [ -z "$SUBS" ]; then exit 1; fi
+          echo "✅ 有效订阅：$SUBS"
+          [ -z "$SUBS" ] && echo "❌ source.txt 为空" && exit 1
 
-      - name: 执行转换
+      - name: 执行转换（超时+禁用所有额外拉取）
         run: |
           mkdir -p ./output
           rm -f ./output/*
-          timeout 120 ./subconverter/subconverter --generate --config pure.ini --path ./output/ --output nodes.txt --exclude-rules --exclude-groups $SUBS
-          timeout 120 ./subconverter/subconverter --generate --type clash --config pure.ini --path ./output/ --output nodes_clash.yaml --exclude-rules --exclude-groups $SUBS
-          timeout 120 ./subconverter/subconverter --generate --type surfboard --config pure.ini --path ./output/ --output nodes_surfboard.conf --exclude-rules --exclude-groups $SUBS
+
+          # 仅生成通用节点，不加载任何模板/规则/表情
+          timeout 90 ./subconverter/subconverter \
+            --generate \
+            --config pure.ini \
+            --path ./output/ \
+            --output nodes.txt \
+            --exclude-rules \
+            --exclude-groups \
+            --no-emo \
+            --no-template \
+            --no-geoip \
+            --retry 2 \
+            --timeout 15 \
+            $SUBS
+
+          timeout 90 ./subconverter/subconverter \
+            --generate --type clash \
+            --config pure.ini \
+            --path ./output/ --output nodes_clash.yaml \
+            --exclude-rules --exclude-groups --no-emo --no-template --no-geoip --retry 2 --timeout 15 $SUBS
+
+          timeout 90 ./subconverter/subconverter \
+            --generate --type surfboard \
+            --config pure.ini \
+            --path ./output/ --output nodes_surfboard.conf \
+            --exclude-rules --exclude-groups --no-emo --no-template --no-geoip --retry 2 --timeout 15 $SUBS
+
+          echo "✅ 转换完成"
           ls -lh ./output/
 
       - name: 提交推送
