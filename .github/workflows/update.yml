@@ -21,7 +21,7 @@ jobs:
           tar xf subconverter_linux64.tar.gz
           chmod +x subconverter/subconverter
 
-      - name: 生成极简配置（彻底关闭所有远程拉取）
+      - name: 生成极简配置
         run: |
           echo '[common]' > pure.ini
           echo 'enable_udp = true' >> pure.ini
@@ -35,50 +35,41 @@ jobs:
           echo 'prepend_rule = false' >> pure.ini
           echo 'append_rule = false' >> pure.ini
           echo 'retain_original_proxy = true' >> pure.ini
-          echo 'remove_special_characters = false' >> pure.ini
-          echo 'skip_certificate_verify = true' >> pure.ini
           echo 'disable_external_snippets = true' >> pure.ini
+          echo 'skip_certificate_verify = true' >> pure.ini
 
-      - name: 读取并校验订阅
+      - name: 读取订阅并自动处理 Base64
         run: |
           SUBS=$(grep -v '^#' source.txt | grep -v '^$')
-          echo "✅ 有效订阅：$SUBS"
-          [ -z "$SUBS" ] && echo "❌ source.txt 为空" && exit 1
+          echo "✅ 原始订阅：$SUBS"
 
-      - name: 执行转换（超时+禁用所有额外拉取）
+          # 先下载内容
+          curl -L --connect-timeout 15 --max-time 60 "$SUBS" -o raw_sub.txt
+
+          # 检测是否是 Base64，是就解码
+          if base64 -d raw_sub.txt > decoded_sub.txt 2>/dev/null && [ -s decoded_sub.txt ]; then
+            echo "✅ 检测到 Base64，已自动解码"
+            FINAL_SUB="./decoded_sub.txt"
+          else
+            echo "ℹ️ 非 Base64，直接使用原始内容"
+            FINAL_SUB="./raw_sub.txt"
+          fi
+
+          echo "FINAL_SUB=$FINAL_SUB" >> $GITHUB_ENV
+
+      - name: 执行转换（使用解码后内容）
         run: |
           mkdir -p ./output
           rm -f ./output/*
+          SUB_FILE="${{ env.FINAL_SUB }}"
 
-          # 仅生成通用节点，不加载任何模板/规则/表情
-          timeout 90 ./subconverter/subconverter \
-            --generate \
-            --config pure.ini \
-            --path ./output/ \
-            --output nodes.txt \
-            --exclude-rules \
-            --exclude-groups \
-            --no-emo \
-            --no-template \
-            --no-geoip \
-            --retry 2 \
-            --timeout 15 \
-            $SUBS
+          timeout 90 ./subconverter/subconverter --generate --config pure.ini --path ./output/ --output nodes.txt --exclude-rules --exclude-groups --retry 2 --timeout 15 "$SUB_FILE"
+          timeout 90 ./subconverter/subconverter --generate --type clash --config pure.ini --path ./output/ --output nodes_clash.yaml --exclude-rules --exclude-groups --retry 2 --timeout 15 "$SUB_FILE"
+          timeout 90 ./subconverter/subconverter --generate --type surfboard --config pure.ini --path ./output/ --output nodes_surfboard.conf --exclude-rules --exclude-groups --retry 2 --timeout 15 "$SUB_FILE"
 
-          timeout 90 ./subconverter/subconverter \
-            --generate --type clash \
-            --config pure.ini \
-            --path ./output/ --output nodes_clash.yaml \
-            --exclude-rules --exclude-groups --no-emo --no-template --no-geoip --retry 2 --timeout 15 $SUBS
-
-          timeout 90 ./subconverter/subconverter \
-            --generate --type surfboard \
-            --config pure.ini \
-            --path ./output/ --output nodes_surfboard.conf \
-            --exclude-rules --exclude-groups --no-emo --no-template --no-geoip --retry 2 --timeout 15 $SUBS
-
-          echo "✅ 转换完成"
+          echo "✅ 完成，文件与行数："
           ls -lh ./output/
+          wc -l ./output/*
 
       - name: 提交推送
         run: |
