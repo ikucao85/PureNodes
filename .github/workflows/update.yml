@@ -14,10 +14,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 拉取订阅（伪装UA+抗超时）
+      - name: 拉取订阅（修复URL格式+伪装UA）
         run: |
-          SUBS=$(grep -v '^#' source.txt | grep -v '^$')
-          [ -z "$SUBS" ] && exit 1
+          # 读取并清理链接（去首尾空格/换行/注释）
+          SUBS=$(grep -v '^#' source.txt | grep -v '^$' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          [ -z "$SUBS" ] && echo "❌ source.txt 无有效链接" && exit 1
+          echo "✅ 拉取地址：$SUBS"
+
+          # 核心：-- 保护URL，避免特殊字符被解析
           curl -L \
             --connect-timeout 30 \
             --max-time 120 \
@@ -25,25 +29,34 @@ jobs:
             --retry-delay 5 \
             -A "ClashforWindows/0.20.39" \
             --insecure \
-            "$SUBS" -o raw.txt -s -S
-          [ ! -s raw.txt ] && exit 1
+            -o raw.txt -s -S \
+            -- "$SUBS"
 
-          # ===== 解码控制区 =====
-          # 若确认永远明文，把下面两行替换为：mv raw.txt content.txt
+          [ ! -s raw.txt ] && echo "❌ 拉取失败" && exit 1
+          # 按需处理解码（确认明文就保留第二行）
           base64 -d raw.txt > decoded.txt 2>/dev/null && mv decoded.txt content.txt || mv raw.txt content.txt
           echo "✅ 内容处理完成"
 
       - name: 提取+过滤+排序
         run: |
           grep -E '^(ss|ssr|vmess|anytls|socks5|http)://' content.txt > raw_nodes.txt || true
-          [ ! -s raw_nodes.txt ] && exit 1
-          awk 'BEGIN{h["HK"]=1;h["港"]=1;h["TW"]=2;h["台"]=2;h["JP"]=3;h["日"]=3;h["SG"]=4;h["新"]=4;h["US"]=5;h["美"]=5} {l=$0;r=99;for(k in h)if(index(l,k)){r=h[k];break} print r"|"l}' raw_nodes.txt | sort -t'|' -k1,1n -k2 | cut -d'|' -f2 > sorted.txt
+          [ ! -s raw_nodes.txt ] && echo "❌ 无有效节点" && exit 1
+          awk '
+          BEGIN{
+            order["HK"]=1; order["港"]=1; order["Hong"]=1
+            order["TW"]=2; order["台"]=2
+            order["JP"]=3; order["日"]=3
+            order["SG"]=4; order["新"]=4
+            order["US"]=5; order["美"]=5
+          }
+          { line=$0; rank=99; for(k in order) if(index(line,k)){ rank=order[k]; break } print rank "|" line }
+          ' raw_nodes.txt | sort -t'|' -k1,1n -k2 | cut -d'|' -f2 > sorted.txt
 
       - name: 生成格式
         run: |
           mkdir -p output
           cp sorted.txt output/nodes.txt
-          awk '{print "  - "$0}' sorted.txt > output/nodes_clash.yaml
+          awk '{print "  - " $0}' sorted.txt > output/nodes_clash.yaml
           echo "[Proxy]" > output/nodes_surfboard.conf
           cat sorted.txt >> output/nodes_surfboard.conf
 
@@ -52,5 +65,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add output/
-          git commit -m "更新 $(date +'%Y%m%d %H:%M')" --allow-empty
+          git commit -m "更新 $(date +'%Y-%m-%d %H:%M')" --allow-empty
           git push
