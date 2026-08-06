@@ -2,7 +2,8 @@ name: Update Surfboard Nodes
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 8 * * *' # 每日 16:00 更新
+    # 北京时间每天 16:00（UTC 08:00）
+    - cron: '0 8 * * *'
 
 jobs:
   build:
@@ -10,54 +11,77 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 拉取并转换节点
+      - name: 安装依赖
+        run: sudo apt update && sudo apt install -y jq
+
+      - name: 拉取订阅并生成 PureNodes.conf
         env:
           SUB_URL: "https://212.47.238.39/api/v1/client/subscribe?token=73fef174bcddb30d5ec96ec8c8476b8c&flag=singbox"
         run: |
-          # 伪装 UA 拉取，跳过证书校验
+          # 伪装 SingBox UA 拉取，跳过证书校验
           curl -sL --insecure \
             -H "User-Agent: sing-box/1.10.0 (linux; amd64)" \
-            "$SUB_URL" -o config.json
+            "$SUB_URL" -o singbox.json
 
-          # 用 jq 解析 + 生成 Surfboard 节点
-          cat > generate.sh <<'SH'
-          #!/bin/bash
-          echo "[Proxy]"
-          jq -r '.outbounds[] | select(.type=="shadowsocks" or .type=="anytls" or .type=="hysteria2") | @base64' config.json | while read -r line; do
-            echo "$line" | base64 -d | jq -c '.'
-          done | while read -r obj; do
-            tag=$(echo "$obj" | jq -r '.tag')
-            type=$(echo "$obj" | jq -r '.type')
-            server=$(echo "$obj" | jq -r '.server')
-            port=$(echo "$obj" | jq -r '.server_port')
-            password=$(echo "$obj" | jq -r '.password')
-            sni=$(echo "$obj" | jq -r '.tls.server_name // empty')
-            insecure=$(echo "$obj" | jq -r '.tls.insecure // false')
+          # 写入头部
+          cat > PureNodes.conf <<'EOF'
+# ==============================================
+# PureNodes | Surfboard 专用节点列表
+# 自动更新：GitHub Actions
+# ==============================================
+
+[Proxy]
+EOF
+
+          # 核心：一次性 jq 解析 + 排序 + 格式化输出
+          jq -r '
+            .outbounds
+            | map(select(.type == "shadowsocks" or .type == "anytls" or .type == "hysteria2"))
+            | sort_by(.tag)
+            | .[] |
+              [
+                .tag,
+                .type,
+                .server,
+                .server_port,
+                .password,
+                .method // "",
+                (.tls.server_name // ""),
+                (if .tls.insecure == true then "true" else "false" end),
+                (.obfs.password // "")
+              ] | @tsv
+          ' singbox.json | while IFS=$'\t' read -r tag type server port password method sni insecure obfs; do
             skip=$([ "$insecure" = "true" ] && echo "skip-cert-verify=true" || echo "")
-
             case "$type" in
               shadowsocks)
-                method=$(echo "$obj" | jq -r '.method')
                 echo "$tag = ss, $server, $port, $method, $password, udp-relay=true"
                 ;;
               anytls)
-                echo "$tag = anytls, $server, $port, $password, udp-relay=true, $skip ${sni:+sni=$sni}"
+                args="udp-relay=true"
+                [ -n "$skip" ] && args="$args, $skip"
+                [ -n "$sni" ] && args="$args, sni=$sni"
+                echo "$tag = anytls, $server, $port, $password, $args"
                 ;;
               hysteria2)
-                obfs=$(echo "$obj" | jq -r '.obfs.password // empty')
-                echo "$tag = hysteria2, $server, $port, password=$password, download-bandwidth=1000, upload-bandwidth=1000, udp-relay=true, $skip ${sni:+sni=$sni} ${obfs:+salamander-password=$obfs}"
+                args="download-bandwidth=1000, upload-bandwidth=1000, udp-relay=true"
+                [ -n "$skip" ] && args="$args, $skip"
+                [ -n "$sni" ] && args="$args, sni=$sni"
+                [ -n "$obfs" ] && args="$args, salamander-password=$obfs"
+                echo "$tag = hysteria2, $server, $port, password=$password, $args"
                 ;;
             esac
-          done | sort > surfboard_nodes.conf
-          echo "✅ 生成完成：$(grep -c '=' surfboard_nodes.conf) 个节点"
-          head -5 surfboard_nodes.conf
-          SH
-          chmod +x generate.sh && sudo apt install -y jq && ./generate.sh
+          done >> PureNodes.conf
+
+          # 统计输出
+          count=$(grep -c '=' PureNodes.conf)
+          echo "✅ 完成：$count 个节点已写入 PureNodes.conf"
+          echo "📄 预览前 10 条："
+          head -15 PureNodes.conf
 
       - name: 提交更新
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add surfboard_nodes.conf
-          git commit -m "update: $(date +'%Y-%m-%d %H:%M') nodes" || true
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git add PureNodes.conf
+          git commit -m "update: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M') 节点更新" || echo "无变更跳过提交"
           git push || true
