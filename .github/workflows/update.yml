@@ -2,7 +2,6 @@ name: Update Surfboard Nodes
 on:
   workflow_dispatch:
   schedule:
-    # 北京时间每天 16:00（UTC 08:00）
     - cron: '0 8 * * *'
 
 jobs:
@@ -18,25 +17,24 @@ jobs:
         env:
           SUB_URL: "https://212.47.238.39/api/v1/client/subscribe?token=73fef174bcddb30d5ec96ec8c8476b8c&flag=singbox"
         run: |
-          # 伪装 SingBox UA 拉取，跳过证书校验
           curl -sL --insecure \
             -H "User-Agent: sing-box/1.10.0 (linux; amd64)" \
             "$SUB_URL" -o singbox.json
 
-          # 写入头部
-          cat > PureNodes.conf <<'EOF'
-# ==============================================
-# PureNodes | Surfboard 专用节点列表
-# 自动更新：GitHub Actions
-# ==============================================
+          echo "# ==============================================" > PureNodes.conf
+          echo "# PureNodes | Surfboard 专用节点列表" >> PureNodes.conf
+          echo "# 自动更新：GitHub Actions" >> PureNodes.conf
+          echo "# ==============================================" >> PureNodes.conf
+          echo "" >> PureNodes.conf
+          echo "[Proxy]" >> PureNodes.conf
 
-[Proxy]
-EOF
-
-          # 核心：一次性 jq 解析 + 排序 + 格式化输出
           jq -r '
             .outbounds
             | map(select(.type == "shadowsocks" or .type == "anytls" or .type == "hysteria2"))
+            | map(select(.tag | startswith("[ss]剩余流量") | not))
+            | map(select(.tag | startswith("[ss]距离下次重置") | not))
+            | map(select(.tag | startswith("[ss]套餐到期") | not))
+            | map(select(.tag | startswith("[ss]如果看不到节点") | not))
             | sort_by(.tag)
             | .[] |
               [
@@ -51,31 +49,30 @@ EOF
                 (.obfs.password // "")
               ] | @tsv
           ' singbox.json | while IFS=$'\t' read -r tag type server port password method sni insecure obfs; do
-            skip=$([ "$insecure" = "true" ] && echo "skip-cert-verify=true" || echo "")
+            skip=""
+            [ "$insecure" = "true" ] && skip="skip-cert-verify=true"
             case "$type" in
               shadowsocks)
-                echo "$tag = ss, $server, $port, $method, $password, udp-relay=true"
+                echo "$tag = ss, $server, $port, $method, $password, udp-relay=true" >> PureNodes.conf
                 ;;
               anytls)
                 args="udp-relay=true"
                 [ -n "$skip" ] && args="$args, $skip"
                 [ -n "$sni" ] && args="$args, sni=$sni"
-                echo "$tag = anytls, $server, $port, $password, $args"
+                echo "$tag = anytls, $server, $port, $password, $args" >> PureNodes.conf
                 ;;
               hysteria2)
                 args="download-bandwidth=1000, upload-bandwidth=1000, udp-relay=true"
                 [ -n "$skip" ] && args="$args, $skip"
-                [ -n "$sni" ] && args="$args, sni=$sni"
+                [ -n "$sni" ] && args="$args, $sni"
                 [ -n "$obfs" ] && args="$args, salamander-password=$obfs"
-                echo "$tag = hysteria2, $server, $port, password=$password, $args"
+                echo "$tag = hysteria2, $server, $port, password=$password, $args" >> PureNodes.conf
                 ;;
             esac
-          done >> PureNodes.conf
+          done
 
-          # 统计输出
-          count=$(grep -c '=' PureNodes.conf)
-          echo "✅ 完成：$count 个节点已写入 PureNodes.conf"
-          echo "📄 预览前 10 条："
+          echo "✅ 完成：$(grep -c '=' PureNodes.conf) 个节点已写入"
+          echo "📄 预览："
           head -15 PureNodes.conf
 
       - name: 提交更新
@@ -83,5 +80,5 @@ EOF
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git add PureNodes.conf
-          git commit -m "update: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M') 节点更新" || echo "无变更跳过提交"
+          git commit -m "update: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M') 节点更新" || true
           git push || true
