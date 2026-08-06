@@ -1,77 +1,63 @@
-name: PureNodes 自动更新
-run-name: 正在刷新节点
-
+name: Update Surfboard Nodes
 on:
-  schedule:
-    - cron: '0 */6 * * *'
   workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * *' # 每日 16:00 更新
 
 jobs:
-  refresh:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: 拉取订阅（修复URL格式+伪装UA）
+      - name: 拉取并转换节点
+        env:
+          SUB_URL: "https://212.47.238.39/api/v1/client/subscribe?token=73fef174bcddb30d5ec96ec8c8476b8c&flag=singbox"
         run: |
-          SUBS=$(grep -v '^#' source.txt | grep -v '^$' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          [ -z "$SUBS" ] && echo "❌ source.txt 无有效链接" && exit 1
-          echo "✅ 拉取地址：$SUBS"
-          curl -L \
-            --connect-timeout 30 \
-            --max-time 120 \
-            --retry 5 \
-            --retry-delay 5 \
-            -A "ClashforWindows/0.20.39" \
-            --insecure \
-            -o raw.txt -s -S \
-            -- "$SUBS"
-          [ ! -s raw.txt ] && echo "❌ 拉取失败" && exit 1
+          # 伪装 UA 拉取，跳过证书校验
+          curl -sL --insecure \
+            -H "User-Agent: sing-box/1.10.0 (linux; amd64)" \
+            "$SUB_URL" -o config.json
 
-      - name: 预览内容（判断是否解码）
-        run: |
-          echo "===== 【原始内容】前300字符 ====="
-          head -c 300 raw.txt
-          echo -e "\n\n===== 【尝试解码】前300字符 ====="
-          base64 -d raw.txt 2>/dev/null | head -c 300 || echo "❌ 解码失败 → 内容是明文，无需解码"
+          # 用 jq 解析 + 生成 Surfboard 节点
+          cat > generate.sh <<'SH'
+          #!/bin/bash
+          echo "[Proxy]"
+          jq -r '.outbounds[] | select(.type=="shadowsocks" or .type=="anytls" or .type=="hysteria2") | @base64' config.json | while read -r line; do
+            echo "$line" | base64 -d | jq -c '.'
+          done | while read -r obj; do
+            tag=$(echo "$obj" | jq -r '.tag')
+            type=$(echo "$obj" | jq -r '.type')
+            server=$(echo "$obj" | jq -r '.server')
+            port=$(echo "$obj" | jq -r '.server_port')
+            password=$(echo "$obj" | jq -r '.password')
+            sni=$(echo "$obj" | jq -r '.tls.server_name // empty')
+            insecure=$(echo "$obj" | jq -r '.tls.insecure // false')
+            skip=$([ "$insecure" = "true" ] && echo "skip-cert-verify=true" || echo "")
 
-      - name: 内容处理（按需启用解码）
-        run: |
-          # 等你看完预览后再决定：
-          # 明文 → 直接 mv raw.txt content.txt
-          # Base64 → 保留下面这行
-          base64 -d raw.txt > decoded.txt 2>/dev/null && mv decoded.txt content.txt || mv raw.txt content.txt
-          echo "✅ 内容处理完成"
+            case "$type" in
+              shadowsocks)
+                method=$(echo "$obj" | jq -r '.method')
+                echo "$tag = ss, $server, $port, $method, $password, udp-relay=true"
+                ;;
+              anytls)
+                echo "$tag = anytls, $server, $port, $password, udp-relay=true, $skip ${sni:+sni=$sni}"
+                ;;
+              hysteria2)
+                obfs=$(echo "$obj" | jq -r '.obfs.password // empty')
+                echo "$tag = hysteria2, $server, $port, password=$password, download-bandwidth=1000, upload-bandwidth=1000, udp-relay=true, $skip ${sni:+sni=$sni} ${obfs:+salamander-password=$obfs}"
+                ;;
+            esac
+          done | sort > surfboard_nodes.conf
+          echo "✅ 生成完成：$(grep -c '=' surfboard_nodes.conf) 个节点"
+          head -5 surfboard_nodes.conf
+          SH
+          chmod +x generate.sh && sudo apt install -y jq && ./generate.sh
 
-      - name: 提取+过滤+排序
-        run: |
-          grep -E '^(ss|ssr|vmess|anytls|socks5|http)://' content.txt > raw_nodes.txt || true
-          [ ! -s raw_nodes.txt ] && echo "❌ 无有效节点" && exit 1
-          awk '
-          BEGIN{
-            order["HK"]=1; order["港"]=1; order["Hong"]=1
-            order["TW"]=2; order["台"]=2
-            order["JP"]=3; order["日"]=3
-            order["SG"]=4; order["新"]=4
-            order["US"]=5; order["美"]=5
-          }
-          { line=$0; rank=99; for(k in order) if(index(line,k)){ rank=order[k]; break } print rank "|" line }
-          ' raw_nodes.txt | sort -t'|' -k1,1n -k2 | cut -d'|' -f2 > sorted.txt
-
-      - name: 生成格式
-        run: |
-          mkdir -p output
-          cp sorted.txt output/nodes.txt
-          awk '{print "  - " $0}' sorted.txt > output/nodes_clash.yaml
-          echo "[Proxy]" > output/nodes_surfboard.conf
-          cat sorted.txt >> output/nodes_surfboard.conf
-
-      - name: 提交
+      - name: 提交更新
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add output/
-          git commit -m "更新 $(date +'%Y-%m-%d %H:%M')" --allow-empty
-          git push
+          git add surfboard_nodes.conf
+          git commit -m "update: $(date +'%Y-%m-%d %H:%M') nodes" || true
+          git push || true
