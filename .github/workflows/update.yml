@@ -2,7 +2,7 @@ name: Update Surfboard Nodes
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 8 * * *' # 每日 16:00 自动更新
+    - cron: '0 8 * * *'
 
 jobs:
   build:
@@ -10,25 +10,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装依赖
+      - name: Install dependencies
         run: sudo apt update && sudo apt install -y jq
 
-      - name: 更新 PureNodes.conf（先清旧节点再写新节点）
+      - name: Fetch & update PureNodes.conf
         env:
           SUB_URL: "https://212.47.238.39/api/v1/client/subscribe?token=73fef174bcddb30d5ec96ec8c8476b8c&flag=singbox"
         run: |
-          # 1. 拉取订阅
+          # 拉取订阅
           curl -sL --insecure \
             -H "User-Agent: sing-box/1.10.0 (linux; amd64)" \
             "$SUB_URL" -o singbox.json
 
-          # 2. 生成新节点列表（自动排序）
-          jq -r '.outbounds[] | select(.type=="shadowsocks" or .type=="anytls" or .type=="hysteria2")' singbox.json | while read -r obj; do
+          # 生成新节点
+          jq -c '.outbounds[] | select(.type=="shadowsocks" or .type=="anytls" or .type=="hysteria2")' singbox.json | sort | while read -r obj; do
             tag=$(echo "$obj" | jq -r '.tag')
             type=$(echo "$obj" | jq -r '.type')
             server=$(echo "$obj" | jq -r '.server')
             port=$(echo "$obj" | jq -r '.server_port')
-            password=$(echo "$obj" | jq -r '.password')
+            pass=$(echo "$obj" | jq -r '.password')
             sni=$(echo "$obj" | jq -r '.tls.server_name // empty')
             insecure=$(echo "$obj" | jq -r '.tls.insecure // false')
             skip=$([ "$insecure" = "true" ] && echo "skip-cert-verify=true" || echo "")
@@ -36,68 +36,45 @@ jobs:
             case "$type" in
               shadowsocks)
                 method=$(echo "$obj" | jq -r '.method')
-                echo "$tag = ss, $server, $port, $method, $password, udp-relay=true"
+                echo "$tag = ss, $server, $port, $method, $pass, udp-relay=true"
                 ;;
               anytls)
-                echo "$tag = anytls, $server, $port, $password, udp-relay=true, $skip ${sni:+sni=$sni}"
+                echo "$tag = anytls, $server, $port, $pass, udp-relay=true${sni:+, sni=$sni}${skip:+, $skip}"
                 ;;
               hysteria2)
                 obfs=$(echo "$obj" | jq -r '.obfs.password // empty')
-                echo "$tag = hysteria2, $server, $port, password=$password, download-bandwidth=1000, upload-bandwidth=1000, udp-relay=true, $skip ${sni:+sni=$sni} ${obfs:+salamander-password=$obfs}"
+                echo "$tag = hysteria2, $server, $port, password=$pass, download-bandwidth=1000, upload-bandwidth=1000, udp-relay=true${sni:+, sni=$sni}${skip:+, $skip}${obfs:+, salamander-password=$obfs}"
                 ;;
             esac
-          done | sort > new_nodes.txt
+          done > new_nodes.txt
 
-          # 3. 精准更新 PureNodes.conf：保留全部内容 → 清空 [Proxy] 内旧节点 → 写入新节点
+          # 精准更新：保留全部内容 → 清空 [Proxy] 内旧节点 → 写入新节点
           if [ -f PureNodes.conf ]; then
             awk '
-              /^\[Proxy\]/ {
-                print;
-                while ((getline) > 0) {
-                  if (/^\[/) { print; exit }
-                }
-                exit
-              }
+              /^\[Proxy\]/ { print; exit }
               { print }
-            ' PureNodes.conf > header.txt
+            ' PureNodes.conf > head.txt
 
             awk '
-              /^\[Proxy\]/ {
-                while ((getline) > 0) {
-                  if (/^\[/) { print; exit }
-                }
-                exit
-              }
-              { print }
-            ' PureNodes.conf > footer.txt
+              f { print }
+              /^\[Proxy\]/ { f=1 }
+              /^\[/ && f { print; exit }
+            ' PureNodes.conf | tail -n +2 > tail.txt
 
-            # 拼接：头部 + 新节点 + 尾部
-            cat header.txt new_nodes.txt footer.txt > PureNodes.conf.tmp
-            mv PureNodes.conf.tmp PureNodes.conf
-            rm -f header.txt footer.txt
+            cat head.txt new_nodes.txt tail.txt > PureNodes.conf
+            rm -f head.txt tail.txt
           else
-            # 不存在则新建基础文件
-            cat > PureNodes.conf <<'EOF'
-# PureNodes | Surfboard 配置
-[General]
-dns-server = 223.5.5.5, 119.29.29.29
-[Proxy]
-EOF
+            echo -e "[General]\ndns-server = 223.5.5.5, 119.29.29.29\n[Proxy]" > PureNodes.conf
             cat new_nodes.txt >> PureNodes.conf
           fi
 
-          # 清理临时文件
           rm -f singbox.json new_nodes.txt
+          echo "✅ 更新完成：$(grep -c '=' PureNodes.conf) 个节点"
 
-          # 结果输出
-          echo "✅ 已清空旧节点，写入新节点：$(grep -c '=' PureNodes.conf) 个"
-          echo "📄 节点预览："
-          awk '/^\[Proxy\]/ {f=1;next} /^\[/ {f=0} f' PureNodes.conf | head -8
-
-      - name: 提交更新
+      - name: Commit & push
         run: |
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add PureNodes.conf
-          git commit -m "update: $(date +'%Y-%m-%d %H:%M') 节点更新" || true
+          git commit -m "update: $(date +'%Y-%m-%d %H:%M') nodes" || true
           git push || true
